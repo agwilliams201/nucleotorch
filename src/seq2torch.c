@@ -185,7 +185,7 @@ void skip_line(FILE *fp){
 static PyObject *torch_from_numpy_func = NULL;
 
 // global static variable to hold bitarray_to_tensor as pyobj
-static PyObject* bitarray_to_tensor(BitArray *b);
+static PyObject* bitarray_to_tensor(BitArray *b, int token_length);
 
 //for freeing bitarray struct
 static void capsule_destructor(PyObject *capsule) {
@@ -196,7 +196,9 @@ static void capsule_destructor(PyObject *capsule) {
 //main method
 static PyObject* process_fastq(PyObject* self, PyObject* args){
     const char* filename;
-    if (!PyArg_ParseTuple(args, "s", &filename)) {
+    unsigned int token_length = 1;  // default: token_length==1 => uint8 output
+    // required string arg, optional uint arg
+    if (!PyArg_ParseTuple(args, "s|I", &filename, &token_length)) {
         return NULL;
     }
     FILE *fp = fopen(filename, "rb");
@@ -248,7 +250,7 @@ static PyObject* process_fastq(PyObject* self, PyObject* args){
         set_according_to_buff(encoded, buff, size);
         // printf("%d\n", bitarray_get(encoded, 20));
         // printf("%c\n", buff[20]);
-        PyObject* tensor = bitarray_to_tensor(encoded);
+        PyObject* tensor = bitarray_to_tensor(encoded, token_length);
         if (!tensor) {
             fclose(fp);
             Py_DECREF(tensor_list);
@@ -273,7 +275,9 @@ static PyObject* process_fastq(PyObject* self, PyObject* args){
 
 static PyObject* process_fasta(PyObject* self, PyObject* args){
     const char* filename;
-    if (!PyArg_ParseTuple(args, "s", &filename)) {
+    unsigned int token_length = 1;  // default: token_length==1 => uint8 output
+    // required string arg, optional uint arg
+    if (!PyArg_ParseTuple(args, "s|I", &filename, &token_length)) {
         return NULL;
     }
     FILE *fp = fopen(filename, "rb");
@@ -315,7 +319,7 @@ static PyObject* process_fasta(PyObject* self, PyObject* args){
             return NULL;
         }
         set_according_to_buff(encoded, buff, size+1);
-        PyObject* tensor = bitarray_to_tensor(encoded);
+        PyObject* tensor = bitarray_to_tensor(encoded, token_length);
         if (!tensor) {
             fclose(fp);
             Py_DECREF(tensor_list);
@@ -337,44 +341,233 @@ static PyObject* process_fasta(PyObject* self, PyObject* args){
     return tensor_list;
 }
 
-PyObject* bitarray_to_tensor(BitArray *b) {
-    //ceil div to get num bytes needed
-    int total_bytes = (b->size * 3 + 7) / 8;
-    //initialize array dims accordingly
-    npy_intp dims[1] = { total_bytes };
 
-    //just group into 8 bit chunks to make the np array of uint8s
-    //this needs to be parallelized + vectorized, so might have to write some custom stuff to interact with numpy api...
-    PyObject *np_array = PyArray_SimpleNewFromData(1, dims, NPY_UINT8, (void*)b->data);
-    if (!np_array) {
-        return NULL;
-    }
-    
-    //b->data now owned by array, only need to free the struct itself
-    PyObject *capsule = PyCapsule_New(b->data, NULL, capsule_destructor);
-    PyArray_SetBaseObject((PyArrayObject*)np_array, capsule);
-    
-    //free struct
-    free(b);
+// deprecated old func
 
-    //pull torch in
-    if (!torch_from_numpy_func) {
+// PyObject* bitarray_to_tensor(BitArray *b) {
+//     //ceil div to get num bytes needed
+//     int total_bytes = (b->size * 3 + 7) / 8;
+//     //initialize array dims accordingly
+//     npy_intp dims[1] = { total_bytes };
+
+//     //just group into 8 bit chunks to make the np array of uint8s
+//     //this needs to be parallelized + vectorized, so might have to write some custom stuff to interact with numpy api...
+//     PyObject *np_array = PyArray_SimpleNewFromData(1, dims, NPY_UINT8, (void*)b->data);
+//     if (!np_array) {
+//         return NULL;
+//     }
+    
+//     //b->data now owned by array, only need to free the struct itself
+//     PyObject *capsule = PyCapsule_New(b->data, NULL, capsule_destructor);
+//     PyArray_SetBaseObject((PyArrayObject*)np_array, capsule);
+    
+//     //free struct
+//     free(b);
+
+//     //pull torch in
+//     if (!torch_from_numpy_func) {
+//         Py_DECREF(np_array);
+//         return NULL;
+//     }
+    
+//     //tuple pack
+//     PyObject *args = PyTuple_Pack(1, np_array);
+//     Py_DECREF(np_array);
+//     if (!args) {
+//         return NULL;
+//     }
+//     //convert np array to tensor
+//     PyObject *tensor = PyObject_CallObject(torch_from_numpy_func, args);
+//     Py_DECREF(args);
+    
+//     return tensor;
+// }
+
+PyObject* bitarray_to_tensor(BitArray *b, int token_length) {
+    // default to uint8
+    if (token_length <= 1) {
+        int total_bytes = (b->size * 3 + 7) / 8;
+        npy_intp dims[1] = { total_bytes };
+        PyObject *np_array = PyArray_SimpleNewFromData(1, dims, NPY_UINT8, (void*)b->data);
+        if (!np_array) {
+            return NULL;
+        }
+        //np array now owns b->data
+        PyObject *capsule = PyCapsule_New(b->data, NULL, capsule_destructor);
+        PyArray_SetBaseObject((PyArrayObject*)np_array, capsule);
+        free(b);
+        
+        if (!torch_from_numpy_func) {
+            Py_DECREF(np_array);
+            return NULL;
+        }
+        PyObject *args = PyTuple_Pack(1, np_array);
         Py_DECREF(np_array);
-        return NULL;
+        if (!args) {
+            return NULL;
+        }
+        PyObject *tensor = PyObject_CallObject(torch_from_numpy_func, args);
+        Py_DECREF(args);
+        return tensor;
     }
     
-    //tuple pack
-    PyObject *args = PyTuple_Pack(1, np_array);
-    Py_DECREF(np_array);
-    if (!args) {
+    //otherwise need to chunk
+    int total_tokens = (b->size + token_length - 1) / token_length; // ceiling division
+    int bits_per_token = token_length * 3;
+    npy_intp dims[1] = { total_tokens };
+
+    if (bits_per_token <= 8) {
+        uint8_t *tokens = malloc(total_tokens * sizeof(uint8_t));
+        if (!tokens) {
+            PyErr_NoMemory();
+            free(b->data);
+            free(b);
+            return NULL;
+        }
+        for (int t = 0; t < total_tokens; t++) {
+            uint8_t token = 0;
+            for (int j = 0; j < token_length; j++) {
+                size_t idx = t * token_length + j;
+                int nucleotide = (idx < b->size) ? bitarray_get(b, idx) : 4; // pad with N
+                token = (token << 3) | (nucleotide & 0x07);
+            }
+            tokens[t] = token;
+        }
+        free(b->data);
+        free(b);
+        PyObject *np_array = PyArray_SimpleNewFromData(1, dims, NPY_UINT8, (void*)tokens);
+        if (!np_array) {
+            free(tokens);
+            return NULL;
+        }
+        PyObject *capsule = PyCapsule_New(tokens, NULL, capsule_destructor);
+        PyArray_SetBaseObject((PyArrayObject*)np_array, capsule);
+        if (!torch_from_numpy_func) {
+            Py_DECREF(np_array);
+            return NULL;
+        }
+        PyObject *args = PyTuple_Pack(1, np_array);
+        Py_DECREF(np_array);
+        if (!args) return NULL;
+        PyObject *tensor = PyObject_CallObject(torch_from_numpy_func, args);
+        Py_DECREF(args);
+        return tensor;
+    } else if (bits_per_token <= 16) {
+        uint16_t *tokens = malloc(total_tokens * sizeof(uint16_t));
+        if (!tokens) {
+            PyErr_NoMemory();
+            free(b->data);
+            free(b);
+            return NULL;
+        }
+        for (int t = 0; t < total_tokens; t++) {
+            uint16_t token = 0;
+            for (int j = 0; j < token_length; j++) {
+                size_t idx = t * token_length + j;
+                int nucleotide = (idx < b->size) ? bitarray_get(b, idx) : 4;
+                token = (token << 3) | (nucleotide & 0x07);
+            }
+            tokens[t] = token;
+        }
+        free(b->data);
+        free(b);
+        PyObject *np_array = PyArray_SimpleNewFromData(1, dims, NPY_UINT16, (void*)tokens);
+        if (!np_array) {
+            free(tokens);
+            return NULL;
+        }
+        PyObject *capsule = PyCapsule_New(tokens, NULL, capsule_destructor);
+        PyArray_SetBaseObject((PyArrayObject*)np_array, capsule);
+        if (!torch_from_numpy_func) {
+            Py_DECREF(np_array);
+            return NULL;
+        }
+        PyObject *args = PyTuple_Pack(1, np_array);
+        Py_DECREF(np_array);
+        if (!args) return NULL;
+        PyObject *tensor = PyObject_CallObject(torch_from_numpy_func, args);
+        Py_DECREF(args);
+        return tensor;
+    } else if (bits_per_token <= 32) {
+        uint32_t *tokens = malloc(total_tokens * sizeof(uint32_t));
+        if (!tokens) {
+            PyErr_NoMemory();
+            free(b->data);
+            free(b);
+            return NULL;
+        }
+        for (int t = 0; t < total_tokens; t++) {
+            uint32_t token = 0;
+            for (int j = 0; j < token_length; j++) {
+                size_t idx = t * token_length + j;
+                int nucleotide = (idx < b->size) ? bitarray_get(b, idx) : 4;
+                token = (token << 3) | (nucleotide & 0x07);
+            }
+            tokens[t] = token;
+        }
+        free(b->data);
+        free(b);
+        PyObject *np_array = PyArray_SimpleNewFromData(1, dims, NPY_UINT32, (void*)tokens);
+        if (!np_array) {
+            free(tokens);
+            return NULL;
+        }
+        PyObject *capsule = PyCapsule_New(tokens, NULL, capsule_destructor);
+        PyArray_SetBaseObject((PyArrayObject*)np_array, capsule);
+        if (!torch_from_numpy_func) {
+            Py_DECREF(np_array);
+            return NULL;
+        }
+        PyObject *args = PyTuple_Pack(1, np_array);
+        Py_DECREF(np_array);
+        if (!args) return NULL;
+        PyObject *tensor = PyObject_CallObject(torch_from_numpy_func, args);
+        Py_DECREF(args);
+        return tensor;
+    } else if (bits_per_token <= 64) {
+        uint64_t *tokens = malloc(total_tokens * sizeof(uint64_t));
+        if (!tokens) {
+            PyErr_NoMemory();
+            free(b->data);
+            free(b);
+            return NULL;
+        }
+        for (int t = 0; t < total_tokens; t++) {
+            uint64_t token = 0;
+            for (int j = 0; j < token_length; j++) {
+                size_t idx = t * token_length + j;
+                int nucleotide = (idx < b->size) ? bitarray_get(b, idx) : 4;
+                token = (token << 3) | (nucleotide & 0x07);
+            }
+            tokens[t] = token;
+        }
+        free(b->data);
+        free(b);
+        PyObject *np_array = PyArray_SimpleNewFromData(1, dims, NPY_UINT64, (void*)tokens);
+        if (!np_array) {
+            free(tokens);
+            return NULL;
+        }
+        PyObject *capsule = PyCapsule_New(tokens, NULL, capsule_destructor);
+        PyArray_SetBaseObject((PyArrayObject*)np_array, capsule);
+        if (!torch_from_numpy_func) {
+            Py_DECREF(np_array);
+            return NULL;
+        }
+        PyObject *args = PyTuple_Pack(1, np_array);
+        Py_DECREF(np_array);
+        if (!args) return NULL;
+        PyObject *tensor = PyObject_CallObject(torch_from_numpy_func, args);
+        Py_DECREF(args);
+        return tensor;
+    } else {
+        PyErr_SetString(PyExc_ValueError, "Token length too high; cannot pack into 64 bits");
+        free(b->data);
+        free(b);
         return NULL;
     }
-    //convert np array to tensor
-    PyObject *tensor = PyObject_CallObject(torch_from_numpy_func, args);
-    Py_DECREF(args);
-    
-    return tensor;
 }
+
 
 static PyMethodDef NucleotorchMethods[] = {
     {"process_fastq", process_fastq, METH_VARARGS, "Process a FASTQ file and return a list of PyTorch tensors."},
