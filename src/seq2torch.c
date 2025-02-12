@@ -16,7 +16,8 @@ BitArray *bitarray_create(size_t n) {
     if (!b) return NULL;
     b->size = n;
     //add 7 for ceil div-- always allocate enough bytes
-    size_t num_bytes = (n + 7) / 8;
+    //mult by 3 because 3 bit elements
+    size_t num_bytes = (n * 3 + 7) / 8;
     b->data = calloc(num_bytes, sizeof(unsigned char));
     if (!b->data) {
         free(b);
@@ -26,20 +27,61 @@ BitArray *bitarray_create(size_t n) {
 }
 
 void bitarray_set(BitArray *b, size_t i, int value) {
-     if (i >= b->size) return;
-    size_t bit_offset = i * 2;
+    //oob check
+    if (i >= b->size) return;
+    size_t bit_offset = i * 3;
     size_t byte_index = bit_offset / 8;
     size_t bit_index = bit_offset % 8;
-    b->data[byte_index] &= ~(0x03 << bit_index);
-    b->data[byte_index] |= ((value & 0x03) << bit_index);
+    size_t total_bytes = (b->size * 3 + 7) / 8;
+
+    //single byte case
+    if (bit_index <= 5) {
+        unsigned char current = b->data[byte_index];
+        //clear bits at target
+        current &= ~(0x07 << bit_index);
+        //set new value for target pos
+        current |= ((value & 0x07) << bit_index);
+        b->data[byte_index] = current;
+    } else {
+        //cross byte case
+        //need uint16_t to handle both bytes
+        uint16_t combined = b->data[byte_index];
+        //last byte case
+        if (byte_index + 1 < total_bytes) {
+            combined |= ((uint16_t)b->data[byte_index + 1]) << 8;
+        }
+        //clear target pos
+        uint16_t mask = 0x07 << bit_index;
+        combined &= ~mask;
+        //set bits across both bytes at target pos
+        combined |= ((value & 0x07) << bit_index);
+        b->data[byte_index] = combined & 0xFF;
+        //last byte case
+        if (byte_index + 1 < total_bytes) {
+            b->data[byte_index + 1] = (combined >> 8) & 0xFF;
+        }
+    }
 }
 
 int bitarray_get(BitArray *b, size_t i) {
+    //oob check
     if (i >= b->size) return 0;
-    size_t bit_offset = i * 2;
+    size_t bit_offset = i * 3;
     size_t byte_index = bit_offset / 8;
     size_t bit_index = bit_offset % 8;
-    return (b->data[byte_index] >> bit_index) & 0x03;
+    size_t total_bytes = (b->size * 3 + 7) / 8;
+    //single byte case
+    if (bit_index <= 5) {
+        unsigned char current = b->data[byte_index];
+        return (current >> bit_index) & 0x07;
+    } else {
+       //cross byte case
+        uint16_t combined = b->data[byte_index];
+        if (byte_index + 1 < total_bytes) {
+            combined |= ((uint16_t)b->data[byte_index + 1]) << 8;
+        }
+        return (combined >> bit_index) & 0x07;
+    }
 }
 
 void set_according_to_buff(BitArray *b, char* buff, long bufflen){
@@ -57,6 +99,8 @@ void set_according_to_buff(BitArray *b, char* buff, long bufflen){
             bitarray_set(b, i, 3);
             break;
             default:
+            //handle any other nucleotide as 'N' (eg, 4)
+            bitarray_set(b, i, 4);
             break;
         }
     }
@@ -90,13 +134,52 @@ size_t get_length_of_seq(FILE *fp){
     return length;
 }
 
+size_t get_length_of_seq_fasta(FILE *fp){
+    long start = ftell(fp);
+    if (start == -1) {
+        perror("ftell");
+        return 0;
+    }
+    int c;
+    size_t length = 0;
+    while ((c = fgetc(fp)) != EOF) {
+        if (c == '>'){
+            break;
+        }
+        if (c != '\n'){
+            length++;
+        }
+    }
+    if (fseek(fp, start, SEEK_SET) != 0) {
+        perror("fseek");
+        return 0;
+    }
+    return length;
+}
+
+void read_seq_into_buff_fasta(char* buff, size_t len, FILE *fp){
+    size_t count = 0;
+    int c;
+    while (count < len && (c = fgetc(fp)) != EOF) {
+        if (c == '\n' || c == '\r') {
+            // Skip newlines and carriage returns.
+            continue;
+        }
+        buff[count++] = c;
+    }
+    buff[count] = '\0';
+    return;
+}
+
+
 void skip_line(FILE *fp){
     int c;
     while ((c = fgetc(fp)) != EOF && c != '\n'){
     }
 }
 
-//cython shit
+
+//cpython stuff
 
 // global static variable to hold torch.from_numpy
 static PyObject *torch_from_numpy_func = NULL;
@@ -154,7 +237,7 @@ static PyObject* process_fastq(PyObject* self, PyObject* args){
         }
         buff[size] = '\0';
         // printf("%s\n", buff);
-        BitArray* encoded = bitarray_create(seqlen * 2);
+        BitArray* encoded = bitarray_create(seqlen);
         if (!encoded){
             free(buff);
             fclose(fp);
@@ -188,9 +271,75 @@ static PyObject* process_fastq(PyObject* self, PyObject* args){
     return tensor_list;
 }
 
+static PyObject* process_fasta(PyObject* self, PyObject* args){
+    const char* filename;
+    if (!PyArg_ParseTuple(args, "s", &filename)) {
+        return NULL;
+    }
+    FILE *fp = fopen(filename, "rb");
+    if (!fp) {
+        PyErr_Format(PyExc_IOError, "Could not open file: %s", filename);
+        return NULL;
+    }
+    PyObject* tensor_list = PyList_New(0);
+    if (!tensor_list) {
+        fclose(fp);
+        return NULL;
+    }
+    int c;
+    int i = 0;
+    //skip the first header
+    skip_line(fp);
+    while ((c = fgetc(fp)) != EOF){
+        size_t seqlen = get_length_of_seq_fasta(fp);
+        // printf("%zu\n", seqlen);
+        long size = sizeof(char) * seqlen;
+        char* buff = malloc(size + 1);
+        if (!buff) {
+            PyErr_NoMemory();
+            fclose(fp);
+            Py_DECREF(tensor_list);
+            return NULL;
+        }
+        //gotta iterate over manually to read into buff fuck me lads
+        read_seq_into_buff_fasta(buff, seqlen, fp);
+        //need double skipline for newline and header
+        skip_line(fp);
+        skip_line(fp);
+        BitArray* encoded = bitarray_create(seqlen);
+        if (!encoded){
+            free(buff);
+            fclose(fp);
+            PyErr_NoMemory();
+            Py_DECREF(tensor_list);
+            return NULL;
+        }
+        set_according_to_buff(encoded, buff, size+1);
+        PyObject* tensor = bitarray_to_tensor(encoded);
+        if (!tensor) {
+            fclose(fp);
+            Py_DECREF(tensor_list);
+            return NULL;
+        }
+        // printf("%d\n", bitarray_get(encoded, 5));
+        // printf("%c\n", buff[5]);
+        // bitarray_free(encoded);
+        free(buff);
+        if (PyList_Append(tensor_list, tensor) != 0) {
+            Py_DECREF(tensor);
+            fclose(fp);
+            Py_DECREF(tensor_list);
+            return NULL;
+        }
+        Py_DECREF(tensor);
+    }
+    fclose(fp);
+    return tensor_list;
+}
+
 PyObject* bitarray_to_tensor(BitArray *b) {
     //ceil div to get num bytes needed
-    int total_bytes = (b->size * 2 + 7) / 8;
+    int total_bytes = (b->size * 3 + 7) / 8;
     //initialize array dims accordingly
     npy_intp dims[1] = { total_bytes };
 
@@ -229,6 +378,7 @@ PyObject* bitarray_to_tensor(BitArray *b) {
 
 static PyMethodDef NucleotorchMethods[] = {
     {"process_fastq", process_fastq, METH_VARARGS, "Process a FASTQ file and return a list of PyTorch tensors."},
+    {"process_fasta", process_fasta, METH_VARARGS, "Process a FASTA file and return a list of PyTorch tensors."},
     //sentinel
     {NULL, NULL, 0, NULL}
 };

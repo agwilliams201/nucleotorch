@@ -13,10 +13,20 @@ def main():
         return
 
     print(f"Processed {len(tensors)} tensors from {filename}")
+
+    filename = "../data/SRR31676618.fasta"
+
+    try:
+        tensors = nucleotorch.process_fasta(filename)
+    except Exception as e:
+        print("Error processing FASTA file:", e)
+        return
     
-    for idx, tensor in enumerate(tensors):
-        print(f"Tensor {idx}:")
-        print(tensor)
+    print(f"Processed {len(tensors)} tensors from {filename}")
+
+    # for idx, tensor in enumerate(tensors):
+    #     print(f"Tensor {idx}:")
+    #     print(tensor)
 
 if __name__ == '__main__':
     main()
