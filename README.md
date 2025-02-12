@@ -11,22 +11,25 @@ Nucleotorch requires Numpy and PyTorch. Nucleotorch only accepts valid FASTQ fil
 
 DOCUMENTATION
 
-def process_fastq(filepath: str)-> List[torch.Tensor]:
-    """ Processes FASTQ reads into PyTorch embedding vectors.
+```python
+def process_fastq(filepath: str) -> List[torch.Tensor]:
+    """
+    Processes FASTQ reads into PyTorch embedding vectors.
 
     Args:
-        filepath (str): path to the FASTQ file relative to cwd
-    
-    Returns:
-        List[torch.Tensor]: a list of PyTorch tensors, with each tensor being composed of uint8s
+        filepath (str): Path to the FASTQ file relative to the current working directory.
 
+    Returns:
+        List[torch.Tensor]: A list of PyTorch tensors, with each tensor being composed of uint8s.
     """
+```
 
 Example usage:
 
+```python
 import nucleotorch
-
 tensors = nucleotorch.process_fastq("path/to/example/FASTQ/file")
+```
 
 Source Code:
 
