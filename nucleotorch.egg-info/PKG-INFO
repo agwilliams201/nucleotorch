@@ -1,6 +1,0 @@
-Metadata-Version: 2.2
-Name: nucleotorch
-Version: 1.0
-Summary: Convert fastq reads to binary PyTorch tensors!
-License-File: LICENSE
-Dynamic: summary

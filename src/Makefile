@@ -14,7 +14,19 @@ all: $(TARGET)
 $(TARGET): seq2torch.c
 	$(CC) $(CFLAGS) -o $(TARGET) seq2torch.c $(LDFLAGS)
 
+# Distribution targets
+sdist:
+	python setup.py sdist
+
+wheel:
+	python setup.py bdist_wheel
+
+dist: sdist wheel
+
+deploy:
+	twine upload dist/*
+
 clean:
-	rm -f $(TARGET)
+	rm -rf build dist *.egg-info $(TARGET)
 
 .PHONY: all clean

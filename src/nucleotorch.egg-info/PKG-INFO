@@ -7,7 +7,7 @@ Author: Alex Williams
 Author-email: agwilliams200@gmail.com
 Classifier: Programming Language :: Python :: 3
 Classifier: Programming Language :: C
-Classifier: License :: Unlicense
+Classifier: License :: Public Domain
 Classifier: Operating System :: OS Independent
 Requires-Python: >=3.6
 Description-Content-Type: text/markdown

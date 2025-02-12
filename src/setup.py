@@ -21,7 +21,7 @@ setup(
     classifiers=[
         "Programming Language :: Python :: 3",
         "Programming Language :: C",
-        "License :: Unlicense",
+        "License :: Public Domain",
         "Operating System :: OS Independent",
     ],
     ext_modules=[module],
