@@ -1,28 +1,20 @@
 # Compiler and flags
 CC = gcc
-CFLAGS = -Wall -Wextra -O2 $(shell python3-config --cflags)
-LDFLAGS = $(shell python3-config --ldflags)
+CFLAGS = -Wall -Wextra -O2 $(shell python3-config --cflags) -I$(shell python3 -c "import numpy; print(numpy.get_include())")
 
-# Target executable name
-TARGET = main
+# Use -shared, -fPIC and -undefined dynamic_lookup for a Python extension module.
+LDFLAGS = $(shell python3-config --ldflags) -shared -fPIC -undefined dynamic_lookup
 
-# Default rule: compile the program
+# Target shared library name (note the .so extension for a Python extension)
+TARGET = nucleotorch.so
+
+# Default rule: compile the module
 all: $(TARGET)
 
-# Rule to compile main.c into the TARGET executable
 $(TARGET): seq2torch.c
 	$(CC) $(CFLAGS) -o $(TARGET) seq2torch.c $(LDFLAGS)
 
-# 'run' rule: compile (if needed) and then run the executable
-run: all
-	./$(TARGET)
-
-# Clean rule: remove the compiled executable
 clean:
 	rm -f $(TARGET)
 
-# Declare non-file targets as phony
-.PHONY: all run clean
-
-
-#make run to run and compile, make all to just compile, make clean to clean
+.PHONY: all clean

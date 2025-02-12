@@ -1,9 +1,12 @@
+#define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <Python.h>
+#include <numpy/arrayobject.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h> 
 
 typedef struct {
+    //total number of bits. to get num elements, divide by 2
     size_t size;
     unsigned char *data;
 } BitArray;
@@ -12,6 +15,7 @@ BitArray *bitarray_create(size_t n) {
     BitArray *b = malloc(sizeof(BitArray));
     if (!b) return NULL;
     b->size = n;
+    //add 7 for ceil div-- always allocate enough bytes
     size_t num_bytes = (n + 7) / 8;
     b->data = calloc(num_bytes, sizeof(unsigned char));
     if (!b->data) {
@@ -92,12 +96,35 @@ void skip_line(FILE *fp){
     }
 }
 
-int main(){
-    char* filename = "../data/9_Swamp_S2B_rbcLa_2019_minq7.fastq";
+//cython shit
+
+// global static variable to hold torch.from_numpy
+static PyObject *torch_from_numpy_func = NULL;
+
+// global static variable to hold bitarray_to_tensor as pyobj
+static PyObject* bitarray_to_tensor(BitArray *b);
+
+//for freeing bitarray struct
+static void capsule_destructor(PyObject *capsule) {
+    void *ptr = PyCapsule_GetPointer(capsule, NULL);
+    free(ptr);
+}
+
+//main method
+static PyObject* process_fastq(PyObject* self, PyObject* args){
+    const char* filename;
+    if (!PyArg_ParseTuple(args, "s", &filename)) {
+        return NULL;
+    }
     FILE *fp = fopen(filename, "rb");
     if (!fp) {
-        perror("fopen");
-        return 0;
+        PyErr_Format(PyExc_IOError, "Could not open file: %s", filename);
+        return NULL;
+    }
+    PyObject* tensor_list = PyList_New(0);
+    if (!tensor_list) {
+        fclose(fp);
+        return NULL;
     }
     int c;
     int i = 0;
@@ -112,27 +139,159 @@ int main(){
         long size = sizeof(char) * seqlen;
         char* buff = malloc(size + 1);
         if (!buff) {
-            perror("malloc");
+            PyErr_NoMemory();
             fclose(fp);
-            return 0;
+            Py_DECREF(tensor_list);
+            return NULL;
         }
         size_t bytesRead = fread(buff, 1, seqlen, fp);
         if (bytesRead != (size_t)size) {
-            perror("fread");
             free(buff);
             fclose(fp);
-            return 0;
+            PyErr_Format(PyExc_IOError, "Failed to read sequence from file");
+            Py_DECREF(tensor_list);
+            return NULL;
         }
         buff[size] = '\0';
         // printf("%s\n", buff);
-        BitArray* encoded = bitarray_create(seqlen * 4);
-        set_according_to_buff(encoded, buff, size+1);
-        printf("%d\n", bitarray_get(encoded, 5));
-        bitarray_free(encoded);
+        BitArray* encoded = bitarray_create(seqlen * 2);
+        if (!encoded){
+            free(buff);
+            fclose(fp);
+            PyErr_NoMemory();
+            Py_DECREF(tensor_list);
+            return NULL;
+        }
+        set_according_to_buff(encoded, buff, size);
+        // printf("%d\n", bitarray_get(encoded, 20));
+        // printf("%c\n", buff[20]);
+        PyObject* tensor = bitarray_to_tensor(encoded);
+        if (!tensor) {
+            fclose(fp);
+            Py_DECREF(tensor_list);
+            return NULL;
+        }
+        // bitarray_free(encoded);
         free(buff);
+        if (PyList_Append(tensor_list, tensor) != 0) {
+            Py_DECREF(tensor);
+            fclose(fp);
+            Py_DECREF(tensor_list);
+            return NULL;
+        }
+        Py_DECREF(tensor);
         for (int i = 0; i < 2; i++){
             skip_line(fp);
         }
     }
-    return 0;
+    fclose(fp);
+    return tensor_list;
 }
+
+PyObject* bitarray_to_tensor(BitArray *b) {
+    //ceil div to get num bytes needed
+    int total_bytes = (b->size * 2 + 7) / 8;
+    //initialize array dims accordingly
+    npy_intp dims[1] = { total_bytes };
+
+    //just group into 8 bit chunks to make the np array of uint8s
+    //this needs to be parallelized + vectorized, so might have to write some custom stuff to interact with numpy api...
+    PyObject *np_array = PyArray_SimpleNewFromData(1, dims, NPY_UINT8, (void*)b->data);
+    if (!np_array) {
+        return NULL;
+    }
+    
+    //b->data now owned by array, only need to free the struct itself
+    PyObject *capsule = PyCapsule_New(b->data, NULL, capsule_destructor);
+    PyArray_SetBaseObject((PyArrayObject*)np_array, capsule);
+    
+    //free struct
+    free(b);
+
+    //pull torch in
+    if (!torch_from_numpy_func) {
+        Py_DECREF(np_array);
+        return NULL;
+    }
+    
+    //tuple pack
+    PyObject *args = PyTuple_Pack(1, np_array);
+    Py_DECREF(np_array);
+    if (!args) {
+        return NULL;
+    }
+    //convert np array to tensor
+    PyObject *tensor = PyObject_CallObject(torch_from_numpy_func, args);
+    Py_DECREF(args);
+    
+    return tensor;
+}
+
+static PyMethodDef NucleotorchMethods[] = {
+    {"process_fastq", process_fastq, METH_VARARGS, "Process a FASTQ file and return a list of PyTorch tensors."},
+    //sentinel
+    {NULL, NULL, 0, NULL}
+};
+
+// module def
+static struct PyModuleDef nucleotorch = {
+    PyModuleDef_HEAD_INIT,    
+    "nucleotorch",               
+    "Convert FASTQ reads to binary PyTorch tensors!", 
+    -1,                         
+    NucleotorchMethods,
+    NULL,   /* m_slots */
+    NULL,   /* m_traverse */
+    NULL,   /* m_clear */
+    NULL    /* m_free */      
+};
+
+// mod init func
+PyMODINIT_FUNC PyInit_nucleotorch(void) {
+    PyObject *m = PyModule_Create(&nucleotorch);
+    if (m == NULL)
+        return NULL;
+    import_array(); 
+
+    PyObject *torch_module = PyImport_ImportModule("torch");
+    if (!torch_module) {
+        Py_DECREF(m);
+        return NULL;
+    }
+    torch_from_numpy_func = PyObject_GetAttrString(torch_module, "from_numpy");
+    Py_DECREF(torch_module);
+    if (!torch_from_numpy_func) {
+        Py_DECREF(m);
+        return NULL;
+    }
+    PyModule_AddObject(m, "torch_from_numpy", torch_from_numpy_func);
+    return m;
+}
+
+// #ifdef TEST_MAIN
+// int main(){
+//     //init py interpreter
+//     Py_Initialize();
+//     if (_import_array() < 0) {
+//         PyErr_Print();
+//         exit(1);
+//     }
+
+//     //simulate calling func
+//     PyObject* args = Py_BuildValue("(s)", "../data/9_Swamp_S2B_rbcLa_2019_minq7.fastq");
+//     PyObject* result = process_fastq(NULL, args);
+//     Py_DECREF(args);
+//     if (result) {
+//         //print res
+//         PyObject* repr = PyObject_Repr(result);
+//         const char* str = PyUnicode_AsUTF8(repr);
+//         printf("Result: %s\n", str);
+//         Py_DECREF(repr);
+//         Py_DECREF(result);
+//     } else {
+//         PyErr_Print();
+//     }
+//     Py_Finalize();
+//     return 0;
+// }
+// #endif
