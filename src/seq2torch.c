@@ -291,7 +291,6 @@ static PyObject* process_fasta(PyObject* self, PyObject* args){
         return NULL;
     }
     int c;
-    int i = 0;
     //skip the first header
     skip_line(fp);
     while ((c = fgetc(fp)) != EOF){
@@ -580,7 +579,7 @@ static PyMethodDef NucleotorchMethods[] = {
 static struct PyModuleDef nucleotorch = {
     PyModuleDef_HEAD_INIT,    
     "nucleotorch",               
-    "Convert FASTQ reads to binary PyTorch tensors!", 
+    "Convert FASTQ and FASTA reads to binary PyTorch tensors!", 
     -1,                         
     NucleotorchMethods,
     NULL,   /* m_slots */

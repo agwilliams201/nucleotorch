@@ -1,0 +1,6 @@
+seq2torch.c
+setup.py
+nucleotorch.egg-info/PKG-INFO
+nucleotorch.egg-info/SOURCES.txt
+nucleotorch.egg-info/dependency_links.txt
+nucleotorch.egg-info/top_level.txt
