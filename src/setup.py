@@ -1,17 +1,18 @@
 from setuptools import setup, Extension
 import numpy
+import sys
 
 module = Extension(
     "nucleotorch",
     sources=["seq2torch.c"],
     include_dirs=[numpy.get_include()],
     extra_compile_args=[],
-    extra_link_args=["-undefined", "dynamic_lookup"],
+    extra_link_args=["-undefined", "dynamic_lookup"] if sys.platform == "darwin" else [],
 )
 
 setup(
     name="nucleotorch",
-    version="1.1.8",
+    version="1.1.12",
     author="Alex Williams",
     author_email="agwilliams200@gmail.com",
     description="Convert FASTQ and FASTA reads to binary PyTorch tensors!",
@@ -27,4 +28,3 @@ setup(
     ext_modules=[module],
     python_requires='>=3.6',
 )
-

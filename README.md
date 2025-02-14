@@ -19,9 +19,13 @@ Nucleotorch requires Numpy and PyTorch. Nucleotorch only accepts valid FASTQ or 
 
 RELEASE NOTES:
 
-Version 1.1.8 (2/12/2025) (Latest): macOS intel support
+Version 1.1.12 (2/14/2025) (Latest): toml updates for venv
 
-Version 1.1.7 (2/12/2025): Distribution fixes
+Version 1.1.11 (2/14/2025): linux support
+
+Version 1.1.8 (2/13/2025): macOS intel support
+
+Version 1.1.7 (2/13/2025): Distribution fixes
 
 Version 1.1.0 (2/12/2025): FASTA and FASTQ support, new token_length parameter allows users to control the size
 of the tokens in the tensor
