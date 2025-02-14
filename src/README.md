@@ -19,7 +19,9 @@ Nucleotorch requires Numpy and PyTorch. Nucleotorch only accepts valid FASTQ or 
 
 RELEASE NOTES:
 
-Version 1.1.10 (2/14/2025) (Latest): linux support
+Version 1.1.13 (2/14/2025) (Latest): toml updates for venv
+
+Version 1.1.11 (2/14/2025): linux support
 
 Version 1.1.8 (2/13/2025): macOS intel support
 
@@ -51,7 +53,7 @@ Example usage:
 
 ```python
 import nucleotorch
-tensors = nucleotorch.process_fastq("path/to/example/FASTQ/file", token_length=6)
+tensors = nucleotorch.process_fastq("path/to/example/FASTQ/file", 6)
 ```
 
 ```python
@@ -73,8 +75,13 @@ Example usage:
 
 ```python
 import nucleotorch
-tensors = nucleotorch.process_fasta("path/to/example/FASTA/file", token_length=6)
+tensors = nucleotorch.process_fasta("path/to/example/FASTA/file", 6)
 ```
+
+KNOWN ISSUES
+
+2/14/2025
+In some cases on intel macOS or linux, venv installation fails due to not finding numpy via the toml. This can be fixed by first installing numpy in the venv, and doing a fresh reinstall of nucleotorch, or by globally installing nucleotorch outside of a venv (assuming you have numpy installed). This allows for a cached file to be built and used for venv installation. To be fixed in v1.1.14
 
 Source Code:
 
