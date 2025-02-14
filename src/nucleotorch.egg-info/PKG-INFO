@@ -1,6 +1,6 @@
 Metadata-Version: 2.2
 Name: nucleotorch
-Version: 1.1.0
+Version: 1.1.7
 Summary: Convert FASTQ and FASTA reads to binary PyTorch tensors!
 Home-page: https://github.com/agwilliams201/nucleotorch
 Author: Alex Williams
@@ -41,7 +41,9 @@ Nucleotorch requires Numpy and PyTorch. Nucleotorch only accepts valid FASTQ or 
 
 RELEASE NOTES:
 
-Version 1.1.0 (2/12/2025) (Latest): FASTA and FASTQ support, new token_length parameter allows users to control the size
+Version 1.1.7 (2/12/2025) (Latest): Distribution fixes
+
+Version 1.1.0 (2/12/2025): FASTA and FASTQ support, new token_length parameter allows users to control the size
 of the tokens in the tensor
 
 Version 1.0.3 (2/11/2025): FASTQ support
