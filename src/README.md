@@ -1,25 +1,3 @@
-Metadata-Version: 2.2
-Name: nucleotorch
-Version: 1.1.8
-Summary: Convert FASTQ and FASTA reads to binary PyTorch tensors!
-Home-page: https://github.com/agwilliams201/nucleotorch
-Author: Alex Williams
-Author-email: agwilliams200@gmail.com
-Classifier: Programming Language :: Python :: 3
-Classifier: Programming Language :: C
-Classifier: License :: Public Domain
-Classifier: Operating System :: OS Independent
-Requires-Python: >=3.6
-Description-Content-Type: text/markdown
-Dynamic: author
-Dynamic: author-email
-Dynamic: classifier
-Dynamic: description
-Dynamic: description-content-type
-Dynamic: home-page
-Dynamic: requires-python
-Dynamic: summary
-
 # nucleotorch
 Convert FASTQ and FASTA reads to binary PyTorch tensors!
 

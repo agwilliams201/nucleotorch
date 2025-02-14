@@ -1,3 +1,4 @@
+README.md
 seq2torch.c
 setup.py
 nucleotorch.egg-info/PKG-INFO
