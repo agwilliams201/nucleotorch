@@ -12,7 +12,7 @@ module = Extension(
 
 setup(
     name="nucleotorch",
-    version="1.1.13",
+    version="1.2.0",
     author="Alex Williams",
     author_email="agwilliams200@gmail.com",
     description="Convert FASTQ and FASTA reads to binary PyTorch tensors!",
