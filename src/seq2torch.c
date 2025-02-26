@@ -273,10 +273,86 @@ static PyObject* process_fastq(PyObject* self, PyObject* args){
     return tensor_list;
 }
 
+// static PyObject* process_fasta(PyObject* self, PyObject* args){
+//     const char* filename;
+//     unsigned int token_length = 1;  // default: token_length==1 => uint8 output
+//     // required string arg, optional uint arg
+//     if (!PyArg_ParseTuple(args, "s|I", &filename, &token_length)) {
+//         return NULL;
+//     }
+//     FILE *fp = fopen(filename, "rb");
+//     if (!fp) {
+//         PyErr_Format(PyExc_IOError, "Could not open file: %s", filename);
+//         return NULL;
+//     }
+//     PyObject* tensor_list = PyList_New(0);
+//     if (!tensor_list) {
+//         fclose(fp);
+//         return NULL;
+//     }
+//     int c;
+//     //skip the first header
+//     skip_line(fp);
+//     while ((c = fgetc(fp)) != EOF){
+//         size_t seqlen = get_length_of_seq_fasta(fp);
+//         // printf("%zu\n", seqlen);
+//         long size = sizeof(char) * seqlen;
+//         char* buff = malloc(size + 1);
+//         if (!buff) {
+//             PyErr_NoMemory();
+//             fclose(fp);
+//             Py_DECREF(tensor_list);
+//             return NULL;
+//         }
+//         //gotta iterate over manually to read into buff fuck me lads
+//         read_seq_into_buff_fasta(buff, seqlen, fp);
+//         //need double skipline for newline and header
+//         skip_line(fp);
+//         skip_line(fp);
+//         BitArray* encoded = bitarray_create(seqlen);
+//         if (!encoded){
+//             free(buff);
+//             fclose(fp);
+//             PyErr_NoMemory();
+//             Py_DECREF(tensor_list);
+//             return NULL;
+//         }
+//         set_according_to_buff(encoded, buff, size+1);
+//         PyObject* tensor = bitarray_to_tensor(encoded, token_length);
+//         if (!tensor) {
+//             fclose(fp);
+//             Py_DECREF(tensor_list);
+//             return NULL;
+//         }
+//         // printf("%d\n", bitarray_get(encoded, 5));
+//         // printf("%c\n", buff[5]);
+//         // bitarray_free(encoded);
+//         free(buff);
+//         if (PyList_Append(tensor_list, tensor) != 0) {
+//             Py_DECREF(tensor);
+//             fclose(fp);
+//             Py_DECREF(tensor_list);
+//             return NULL;
+//         }
+//         Py_DECREF(tensor);
+//     }
+//     fclose(fp);
+//     return tensor_list;
+// }
+
+static inline int nucleotide_to_code(char nuc) {
+    switch(toupper(nuc)) {
+        case 'A': return 0;  // 000
+        case 'T': return 1;  // 001
+        case 'G': return 2;  // 010
+        case 'C': return 3;  // 011
+        default:  return 4;  // 100, represents 'N'
+    }
+}
+
 static PyObject* process_fasta(PyObject* self, PyObject* args){
     const char* filename;
-    unsigned int token_length = 1;  // default: token_length==1 => uint8 output
-    // required string arg, optional uint arg
+    unsigned int token_length = 1;  // default: each token is 1 nucleotide
     if (!PyArg_ParseTuple(args, "s|I", &filename, &token_length)) {
         return NULL;
     }
@@ -285,59 +361,106 @@ static PyObject* process_fasta(PyObject* self, PyObject* args){
         PyErr_Format(PyExc_IOError, "Could not open file: %s", filename);
         return NULL;
     }
-    PyObject* tensor_list = PyList_New(0);
-    if (!tensor_list) {
+    // Skip the first header line.
+    skip_line(fp);
+    
+    // Determine the total number of nucleotide characters in the sequence.
+    size_t seqlen = get_length_of_seq_fasta(fp);
+    if (seqlen == 0) {
         fclose(fp);
+        PyErr_SetString(PyExc_ValueError, "No sequence data found.");
         return NULL;
     }
-    int c;
-    //skip the first header
-    skip_line(fp);
-    while ((c = fgetc(fp)) != EOF){
-        size_t seqlen = get_length_of_seq_fasta(fp);
-        // printf("%zu\n", seqlen);
-        long size = sizeof(char) * seqlen;
-        char* buff = malloc(size + 1);
-        if (!buff) {
-            PyErr_NoMemory();
-            fclose(fp);
-            Py_DECREF(tensor_list);
-            return NULL;
+    // Compute total tokens: ceiling division.
+    size_t total_tokens = (seqlen + token_length - 1) / token_length;
+    int token_bits = token_length * 3;  // bits per token
+    
+    // Choose the minimal unsigned type.
+    void *tokens = NULL;
+    int npy_type;
+    if (token_bits <= 8) {
+        tokens = malloc(total_tokens * sizeof(uint8_t));
+        npy_type = NPY_UINT8;
+    } else if (token_bits <= 16) {
+        tokens = malloc(total_tokens * sizeof(uint16_t));
+        npy_type = NPY_UINT16;
+    } else if (token_bits <= 32) {
+        tokens = malloc(total_tokens * sizeof(uint32_t));
+        npy_type = NPY_UINT32;
+    } else if (token_bits <= 64) {
+        tokens = malloc(total_tokens * sizeof(uint64_t));
+        npy_type = NPY_UINT64;
+    } else {
+        fclose(fp);
+        PyErr_SetString(PyExc_ValueError, "Token length too high; cannot pack into 64 bits");
+        return NULL;
+    }
+    if (!tokens) {
+        fclose(fp);
+        PyErr_NoMemory();
+        return NULL;
+    }
+    
+    // Process the file token by token.
+    // We'll use a small buffer to hold up to token_length characters.
+    char chunk[token_length];
+    size_t t = 0;
+    int ch;
+    while (t < total_tokens) {
+        int count = 0;
+        // Read token_length characters, skipping newlines.
+        while (count < (int)token_length && (ch = fgetc(fp)) != EOF) {
+            if (ch == '\n' || ch == '\r') continue;
+            chunk[count++] = (char) ch;
         }
-        //gotta iterate over manually to read into buff fuck me lads
-        read_seq_into_buff_fasta(buff, seqlen, fp);
-        //need double skipline for newline and header
-        skip_line(fp);
-        skip_line(fp);
-        BitArray* encoded = bitarray_create(seqlen);
-        if (!encoded){
-            free(buff);
-            fclose(fp);
-            PyErr_NoMemory();
-            Py_DECREF(tensor_list);
-            return NULL;
+        // If no characters were read, break.
+        if (count == 0) break;
+        // If we read fewer than token_length, pad the rest with 'N'.
+        for (int j = count; j < (int)token_length; j++) {
+            chunk[j] = 'N';
         }
-        set_according_to_buff(encoded, buff, size+1);
-        PyObject* tensor = bitarray_to_tensor(encoded, token_length);
-        if (!tensor) {
-            fclose(fp);
-            Py_DECREF(tensor_list);
-            return NULL;
+        // Convert this chunk to a token.
+        // We'll accumulate in a 64-bit variable (which we then cast to the minimal type).
+        uint64_t token_val = 0;
+        for (int j = 0; j < (int)token_length; j++) {
+            int code = nucleotide_to_code(chunk[j]);
+            token_val = (token_val << 3) | (code & 0x07);
         }
-        // printf("%d\n", bitarray_get(encoded, 5));
-        // printf("%c\n", buff[5]);
-        // bitarray_free(encoded);
-        free(buff);
-        if (PyList_Append(tensor_list, tensor) != 0) {
-            Py_DECREF(tensor);
-            fclose(fp);
-            Py_DECREF(tensor_list);
-            return NULL;
-        }
-        Py_DECREF(tensor);
+        // Store token_val in the tokens array using the appropriate type.
+        // if (npy_type == NPY_UINT8)
+        //     ((uint8_t*)tokens)[t] = (uint8_t) token_val;
+        // else if (npy_type == NPY_UINT16)
+        //     ((uint16_t*)tokens)[t] = (uint16_t) token_val;
+        // else if (npy_type == NPY_UINT32)
+        //     ((uint32_t*)tokens)[t] = (uint32_t) token_val;
+        // else if (npy_type == NPY_UINT64)
+        //     ((uint64_t*)tokens)[t] = token_val;
+        t++;
     }
     fclose(fp);
-    return tensor_list;
+    
+    // Create a NumPy array from the tokens.
+    npy_intp dims[1] = { t };  // actual tokens processed
+    PyObject *np_array = PyArray_SimpleNewFromData(1, dims, npy_type, tokens);
+    if (!np_array) {
+        free(tokens);
+        return NULL;
+    }
+    // Transfer ownership of tokens to the numpy array.
+    PyObject *capsule = PyCapsule_New(tokens, NULL, capsule_destructor);
+    PyArray_SetBaseObject((PyArrayObject*)np_array, capsule);
+    
+    // Convert NumPy array to a PyTorch tensor.
+    if (!torch_from_numpy_func) {
+        Py_DECREF(np_array);
+        return NULL;
+    }
+    PyObject *args_tensor = PyTuple_Pack(1, np_array);
+    Py_DECREF(np_array);
+    if (!args_tensor) return NULL;
+    PyObject *tensor = PyObject_CallObject(torch_from_numpy_func, args_tensor);
+    Py_DECREF(args_tensor);
+    return tensor;
 }
 
 PyObject* bitarray_to_tensor(BitArray *b, int token_length) {
@@ -651,3 +774,4 @@ PyMODINIT_FUNC PyInit_nucleotorch(void) {
 //     return 0;
 // }
 // #endif
+
